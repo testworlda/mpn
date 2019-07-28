@@ -1,0 +1,186 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Jul 28 14:10:37 2019
+
+@author: testworld
+"""
+
+
+import tensorflow as tf
+import numpy as np
+import datapreproc as dataset
+tf.reset_default_graph()
+
+class Model:
+    def __init__(self,batch_size = 15,input_size = 8,seq_len_encode = 22,seq_len_decode = 10):
+        self.batch_size = batch_size
+        self.input_size = input_size
+        print("batch_size:"+str(batch_size)+"\n")
+        print("input_size:"+str(input_size)+"\n")
+        print("seq_len_encode:"+str(seq_len_encode)+"\n")
+        print("seq_len_decode:"+str(seq_len_decode)+"\n")
+        
+        
+        
+        self.encoder_inputs  = []
+        self.decoder_inputs  = []
+        self.decoder_targets = []
+        for i in range(seq_len_encode):
+            self.encoder_inputs.append(tf.placeholder(tf.float32, [batch_size, input_size], name="EncoderInput%d" % i))
+
+        self.decoder_inputs.append( tf.placeholder(tf.float32, [batch_size, input_size], name="DecoderInput"))
+        
+        for i in range(seq_len_decode):
+            self.decoder_targets.append(tf.placeholder(tf.float32, [batch_size, input_size], name="DecoderTarget%d" % i))
+        pass
+
+    def genCellCfg(self,LayerNum = 10):
+        return {'LayerNum':LayerNum,'RnnSize':20}
+
+    def CreateCodeCell(self,CellCfg,scope):
+        with tf.variable_scope(scope) as sp:
+            cell = tf.nn.rnn_cell.GRUCell(CellCfg['RnnSize'])
+            if CellCfg['LayerNum'] > 1:
+                cell = tf.nn.rnn_cell.MultiRNNCell([cell]*CellCfg['LayerNum'])
+        return cell
+    def rnnCoder(self,cell,inputx,initial_state = None,scope=None):
+        print("inputx")
+        print(inputx)
+        print("initial_state")
+        print(initial_state)
+        
+        encoder_outputs, final_state = tf.nn.static_rnn(cell, inputx,scope=scope, dtype=tf.float32)
+        
+        print("=====================")
+        
+        return encoder_outputs,final_state
+    def attention(self,decode_inputs,init_state,attention_states,cell,num_heads = 1):
+        outputs, state = tf.contrib.legacy_seq2seq.attention_decoder(decode_inputs,init_state,attention_states,cell,num_heads = num_heads)
+        return outputs,state
+        pass
+    def create_dicts(self):
+        pass
+    def predict(self,Encell,Decell,times):
+        encoder_outputs,final_state = self.rnnCoder(Encell,self.encoder_inputs)
+        top_states = [tf.reshape(e, [-1, 1, Encell.output_size]) for e in encoder_outputs]
+        attention_states = tf.concat(axis=1, values=top_states)
+        outputs = [self.decoder_inputs[0]]
+        state = [final_state]
+        with tf.variable_scope('ttt',reuse = tf.AUTO_REUSE) as sp:
+            for _ in range(times):
+                t_outputs,t_state = self.attention([outputs[-1]],state[-1],attention_states,Decell)
+                outputs.append(t_outputs[-1])
+                state.append(t_state)
+        return outputs,state
+    def CacLoss(self,Predicts):
+        loss = 0.0
+        for output, target in zip(Predicts, self.decoder_targets):
+            loss += tf.nn.softmax_cross_entropy_with_logits(logits=output, labels=target)
+        sumloss = tf.reduce_mean(loss)
+        return sumloss
+    def create_feed_dict(self,encoder_input_data,decoder_input_data,targets_data):
+        feed_dict = {}
+        for placeholder, data in zip(self.encoder_inputs, encoder_input_data):
+            feed_dict[placeholder] = data
+
+        for placeholder, data in zip(self.decoder_inputs, decoder_input_data):
+            feed_dict[placeholder] = data
+
+        for placeholder, data in zip(self.decoder_targets, targets_data):
+            feed_dict[placeholder] = data
+
+        for placeholder in self.target_weights:
+            feed_dict[placeholder] = np.ones([self.batch_size, 1])
+
+        return feed_dict
+    
+        #encoder_input_data, decoder_input_data, targets_data = dataset.next_batch( FLAGS.batch_size, FLAGS.max_steps, train_mode=False)
+    
+    
+    def step(self,loss,stepnum):
+        optimizer = tf.train.AdamOptimizer()
+        train_op = optimizer.minimize(loss)
+        """
+        with tf.Session() as sess:
+            init = tf.global_variables_initializer()
+            sess.run(init)
+            for i in range(stepnum):
+                encoder_input_data, decoder_input_data, targets_data = dataset.next_batch( FLAGS.batch_size, FLAGS.max_steps)
+
+                # Train
+                feed_dict = self.create_feed_dict(
+                    encoder_input_data, decoder_input_data, targets_data)
+                d_x, l = sess.run([loss, train_op], feed_dict=feed_dict)
+                train_loss_value = 0.9 * train_loss_value + 0.1 * d_x
+
+                if i % 100 == 0:
+                    print('Step: %d' % i)
+                    print("Train: ", train_loss_value)
+
+                encoder_input_data, decoder_input_data, targets_data = dataset.next_batch(
+                    FLAGS.batch_size, FLAGS.max_steps, train_mode=False)
+                # Test
+                feed_dict = self.create_feed_dict(
+                    encoder_input_data, decoder_input_data, targets_data)
+                inps_ = sess.run(self.inps, feed_dict=feed_dict)
+
+                predictions = sess.run(self.predictions, feed_dict=feed_dict)
+
+                test_loss_value = 0.9 * test_loss_value + 0.1 * sess.run(test_loss, feed_dict=feed_dict)
+
+                if i % 100 == 0:
+                    print("Test: ", test_loss_value)
+
+                predictions_order = np.concatenate([np.expand_dims(prediction, 0) for prediction in predictions])
+                predictions_order = np.argmax(predictions_order, 2).transpose(1, 0)[:, 0:FLAGS.max_steps]
+
+                input_order = np.concatenate(
+                    [np.expand_dims(encoder_input_data_, 0) for encoder_input_data_ in encoder_input_data])
+                input_order = np.argsort(input_order, 0).squeeze().transpose(1, 0) + 1
+
+                correct_order += np.sum(np.all(predictions_order == input_order,
+                                               axis=1))
+                all_order += FLAGS.batch_size
+
+                if i % 100 == 0:
+                    print('Correct order / All order: %f' % (correct_order / all_order))
+                    correct_order = 0
+                    all_order = 0
+        """
+        pass
+
+
+
+global g_BATCH_SIZE_,g_INPUT_SIZE,g_ENCODE_LTH
+g_BATCH_SIZE_ = 15
+g_ENCODE_LTH  = 10
+g_DECODE_LTH  = 11
+dd = dataset.DataProc()
+Data = dd.GenSampleType1(Symbol = 'btmusdt',Period = '1min')
+InputX,InputTarget,TargetY = dd.NextBatch(Data,batchsize = g_BATCH_SIZE_,EncodeStep = g_ENCODE_LTH,DecodeStep = g_DECODE_LTH)
+g_INPUT_SIZE = InputX[0].shape[1]
+
+
+#m = Model(batch_size = g_BATCH_SIZE_,input_size = g_INPUT_SIZE,seq_len_encode = g_ENCODE_LTH,seq_len_decode = g_DECODE_LTH)
+m = Model()
+
+Encell = m.CreateCodeCell(m.genCellCfg(),'Encode')
+Decell = m.CreateCodeCell(m.genCellCfg(),'Decode')
+outputs,state = m.predict(Encell,Decell,10)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
