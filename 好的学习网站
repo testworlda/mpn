@@ -32,7 +32,32 @@ https://arxiv.org/abs/1611.08050
 
 
 
-
+def Encoder(x,feedback_bits):
+    B=1
+    x = tf.reshape(x,[-1,1024])
+    m = tf.get_variable('m',shape=())
+    w = tf.get_variable('w',shape=())
+    
+    m = 0.25+tf.sigmoid(m)/2
+    w = 1-1/1.2+tf.sigmoid(m)/1.2
+    x = x - m
+    x = x/w
+    w = tf.get_variable('vec',shape=(1024,128))
+    b = tf.get_variable('b',shape=(1,128))
+    x = tf.sigmoid(tf.matmul(x,w)+b)
+    
+    x = layers.Dense(units=int(feedback_bits/B), activation='sigmoid')(x)
+    encoder_output = QuantizationLayer(B)(x)
+    return encoder_output
+def Decoder(x,feedback_bits):
+    B=1
+    decoder_input = DeuantizationLayer(B)(x)
+    x = tf.keras.layers.Reshape((-1, int(feedback_bits/B)))(decoder_input)
+    x = layers.Dense(1024*4, activation='sigmoid')(x)
+    w = tf.get_variable('vec',shape=(1024*4,1024*4))
+    b = tf.get_variable('b',shape=(1,1024*4))
+    x = tf.relu(tf.matmul(x,w)+b)
+    decoder_output = layers.Conv2D(2, 3, padding = 'SAME',activation="sigmoid")(tf.reshape(x,(-1,16,32,2*4)))
 
 
 
